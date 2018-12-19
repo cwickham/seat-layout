@@ -1,0 +1,198 @@
+---
+output: github_document
+---
+
+# Oregon House Seat Layout
+
+The code in this README generates a GeoJSON file, [`seats.json`](/seats.json) of the approximate layout of desks in the Oregon State House of Representatives.
+
+This is a little abusive of the format since obviously the coordinates of the desks are not geographical in nature.  However, GeoJSON appears to be the easiest way to get abitrary polygons in vega-lite using the  [geoshape](https://vega.github.io/vega-lite/docs/geoshape.html) mark.
+
+The code makes heavy use of the [sf](http://r-spatial.github.io/sf/) package to represent polygons, and [purrr](https://purrr.tidyverse.org/) to manipulate lists.
+
+## Setup
+
+```{r setup, message = FALSE}
+# devtools::install_github("ropensci/geojsonio")
+library(tidyverse)
+library(geojsonio)
+library(sf)
+library(here)
+library(jsonlite)
+```
+
+## Setting up parameters
+
+Relative seat dimensions:
+```{r}
+width <- 0.75
+height <- 0.5
+```
+
+Seat layout of one side:
+```{r}
+cols <- 4
+rows <- 8
+```
+
+Parameters affecting curvature:
+```{r}
+radius <- 20
+angle_range <- c(5, 20)
+```
+
+## Constructing seat layout
+
+Make each seat a scaled square:
+```{r}
+unit_square <- matrix(c(
+    0, 0,
+    0, 1, 
+    1, 1, 
+    1, 0,
+    0, 0
+  ), 
+  ncol = 2, byrow = TRUE) - c(0.5, 0.5)
+
+one_seat <- unit_square %*%
+  matrix(c(width, 0, 0, height), ncol = 2, byrow = T)
+
+seat_poly <- st_polygon(list(one_seat))
+plot(seat_poly, axes = TRUE)
+```
+
+Put seat centers of one row along a circle:
+```{r}
+theta <- -pi * seq(angle_range[1], angle_range[2], 
+  length.out = cols)/180
+
+# distance between centers
+chord <- abs(radius*2*sin(diff(theta)[1]/2))
+
+# coordinates of centers
+x <- radius * sin(theta)
+y <- radius * cos(theta)
+
+# a list of points, one for each seat each center
+centers <- st_sfc(map2(-x, -y, ~ st_point(c(.x, .y))))
+
+# a list of seats, one for each seat each center
+seats <- st_sfc(rep(list(seat_poly), length(centers)))
+
+# translate and scale seats to make a row
+one_row <- seats * chord + centers 
+
+plot(one_row)
+```
+
+Then rotate to face inward:
+```{r}
+rotate <- function(a) {
+  matrix(c(cos(a), sin(a), -sin(a), cos(a)), 2, 2)
+}
+
+rotated_seats <- pmap(list(one_row, theta, centers),
+  function(rect, angle, center){
+    (rect - center)*rotate(angle) + center
+  }
+) %>% st_sfc()
+
+plot(rotated_seats) 
+```
+
+Now make RHS by repeating once for each row
+```{r}
+rhs_seats <-  map(1:rows, ~ rotated_seats + c(0, .)*chord) %>% 
+   purrr::flatten() %>% 
+   st_sfc()
+
+plot(rhs_seats)
+```
+
+Put in `sf` to keep track of rows and columns
+```{r}
+rhs <- st_sf(
+  col = rep(cols + seq_len(cols), rows),
+  row = rep(seq_len(rows), each = cols) %>% rev(),
+  geometry = rhs_seats)
+plot(rhs)
+```
+
+Exclude any seats that aren't part of the layout
+```{r}
+rhs <- rhs[c(-1, -32), ]
+plot(rhs)
+```
+
+Then mirror for LHS
+```{r}
+mirror_y <- matrix(c(-1, 0, 0, 1), nrow = 2, byrow = TRUE)
+lhs <- rhs %>% 
+  mutate(
+    geometry = geometry * mirror_y,
+    col = 2*cols - col + 1
+  )
+```
+
+This mirroring means points are specified counter-clockwise which vega-lite doesn't like, so need to reverse the order of coordinates:
+```{r}
+reverse_winding <- function(poly){
+  coords <- st_coordinates(poly)
+  rev_rows <- rev(seq_len(nrow(coords)))
+  st_polygon(list(coords[rev_rows, c("X", "Y")]))
+}
+
+lhs <- lhs %>% 
+  mutate(geometry = map(geometry, reverse_winding))
+```
+
+Then put togther
+```{r}
+seats <- rbind(lhs, rhs)
+plot(seats)
+```
+
+## Add metadata for seats
+
+```{r}
+centroids <- seats$geometry %>% 
+  st_centroid() %>% 
+  st_coordinates()
+```
+
+```{r}
+# coordinates of center
+seats <- seats %>% 
+  mutate(
+    x = centroids[, 1],
+    y = centroids[, 2])
+
+# desk number
+seats <- seats %>% 
+  arrange(row, col) %>% 
+  mutate(seat = 1:n()) 
+```
+
+## The final layout
+
+```{r}
+seats %>% 
+  ggplot() +
+    geom_sf() +
+    geom_text(aes(x = x, y = y, label = seat))
+```
+
+## Save for later
+```{r, message=FALSE, results="hide"}
+seats %>% 
+geojson_list(seats) %>% 
+  geojson_write(file = here("seats.json"),
+    pretty = TRUE)
+```
+
+## Session Info
+
+```{r}
+sessionInfo()
+```
+
