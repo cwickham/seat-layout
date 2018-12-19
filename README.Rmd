@@ -10,6 +10,10 @@ This is a little abusive of the format since obviously the coordinates of the de
 
 The code makes heavy use of the [sf](http://r-spatial.github.io/sf/) package to represent polygons, and [purrr](https://purrr.tidyverse.org/) to manipulate lists.
 
+The code to generate [`seats.json`](/seats.json) is licensed under an [MIT license](LICENSE.md).
+
+The file  [`seats.json`](/seats.json) itself is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License</a>.
+
 ## Setup
 
 ```{r setup, message = FALSE}
